@@ -15,7 +15,9 @@ KEYWORDS = {
     "IF": "start_cond",
     "ENDIF": "end_cond",
     "INPUT" : "input_function",
-    "END": "end_script"
+    "END": "end_script",
+    "LOOP": "loop",
+    "ENDLOOP": "end_loop"
 } # Keyword: type
 
 REGEXES = {
@@ -32,7 +34,7 @@ MACROS = {
 
 CONDITIONS = ["<", ">", "==", "<=", ">=", "!=", "NUM", "NOT_NUM"]
 
-EVENTS = ["variable_declaration", "function_call", "print", "conditional", "conditional_end", "input", "end_script"]
+EVENTS = ["variable_declaration", "function_call", "print", "conditional", "conditional_end", "input", "end_script", "loop", "end_loop"]
 
 
 class Interpreter:
@@ -48,11 +50,11 @@ class Interpreter:
     
 
     # GEt line data    
-    def _line_interpret(self, line: str, line_num: int) -> dict:
+    def _line_interpret(self, line: str, line_num: int, file: list) -> dict:
         index = 0
         for word in line.split(" "):
             word = stringmanip.sanitize(word)
-            
+                
             # Check if there's a keyword on first char
             if word in KEYWORDS.keys() and index == 0:
                 tp = KEYWORDS[word]
@@ -189,7 +191,7 @@ class Interpreter:
                     # Look for end of condition
                     found = False
                     endif_line = line_num
-                    for line in self.file[self.current_line:]:
+                    for line in file[line_num:]:
                         endif_line += 1
                         if "ENDIF" in line:
                             found = True
@@ -242,6 +244,28 @@ class Interpreter:
                     return {
                         "event": EVENTS[6]
                     }
+                elif tp == "loop":
+                    endloop = line_num
+                    found = False
+                    
+                    for ln in file[line_num:]:
+                        endloop += 1
+                        if "ENDLOOP" in ln:
+                            found = True
+                            break
+                        
+                    if not found:
+                        messaging.message(0, f"Missing ENDLOOP for loop at {line_num}")
+                        self._exit(1)
+                    
+                    return {
+                        "event": EVENTS[7],
+                        "endloop": endloop
+                    }
+                elif tp == "end_loop":
+                    return {
+                        "event": EVENTS[8]
+                    }
                 else:
                     return {
                         "event": "NULL"
@@ -259,22 +283,30 @@ class Interpreter:
             index += 1
             
             
-    def run(self, debug: bool = False, lines: list[str] = []):
+    def run(self, debug: bool = False, lines: list[str] = [], use_global_linecount: bool = True):
         run_at = 0
-        if not lines:
-            lines = self.file
+        if len(lines) == 0 and use_global_linecount:
+            lines = self.file            
         
-        for line in self.file:
-            self.current_line += 1
+        line_num = self.current_line
+        
+        if not use_global_linecount:
+            line_num = 0
             
-            if run_at < self.current_line:  
+        for line in lines:
+            line_num += 1
+            
+            if self.current_line > line_num:
+                continue
+            
+            if run_at < line_num:  
                 run_at += 1
                 
-            debug_str = f"\nLine: {self.current_line}\nRun at: {run_at}"
+            debug_str = f"\nLine: {line_num}\nRun at: {run_at}"
             line_info = {}
             
-            if not self.current_line < run_at:
-                line_info = self._line_interpret(line, self.current_line)
+            if not line_num < run_at:
+                line_info = self._line_interpret(line, line_num, lines)
             
             debug_str += f"\nAction: {line_info}"
             if debug:
@@ -283,7 +315,12 @@ class Interpreter:
             if "event" not in line_info.keys():
                 continue
             
-            if line_info["event"] == "conditional":
+            event = line_info["event"]
+            
+            if event == "NULL":
+                continue
+            
+            if event == "conditional":
                 condition = line_info["condition"]
                 
                 value_1 = condition["value_1"]
@@ -313,8 +350,30 @@ class Interpreter:
                     run_at = line_info["endif_line"]
                     continue
                 
-            if line_info["event"] == "end_script":
+            if event == "end_script":
                 return
+            
+            if event == "loop":
+                begining = self.current_line + 1
+                ending = line_info["endloop"] - 1
+                run = []
+                for line in lines[begining:ending]:
+                    run.append(stringmanip.sanitize(line))
+                
+                if len(run) > 0:
+                    try:
+                        while run[-1] in ["LOOP", "ENDLOOP"]:
+                            del run[-1]
+                    except IndexError:
+                        pass
+                
+                self.run(debug, run, False)
+                self.current_line = ending + 1
+                
+            
+            if use_global_linecount:
+                self.current_line = line_num
+                    
                 
 if __name__ == '__main__':
     test = Interpreter("test.txt")
